@@ -40,6 +40,56 @@ This project provides a Dockerized environment to connect to an OpenConnect VPN 
    docker-compose up -d
    ```
 
+## Usage
+
+### Retrieving VPN_SERVERCERT and VPN_AUTHGROUP
+To get the required VPN_SERVERCERT and VPN_AUTHGROUP, run the following command on a system with OpenConnect installed:
+```sh
+openconnect --authenticate --user=VPN_USERNAME VPN_SERVER
+```
+After entering your password, OpenConnect will display authentication groups. Choose the appropriate one, and the server certificate hash (usually in `pin-sha256:XYZ123` format) will be shown in the connection logs.
+
+### Using as a Jumphost
+To use this container as a jumphost for SSH connections, add the following to your `~/.ssh/config` file:
+```sh
+Host jumphost
+  HostName CONTAINER_IP
+  User root
+  Port 8223
+  IdentityFile /path/to/your/private/key
+  ForwardAgent yes
+```
+Then, use it to jump to another host:
+```sh
+ssh -J jumphost user@destination_host
+```
+
+### Standard Usage
+- **SSH Access:** Connect to the container with:
+  ```sh
+  ssh -p 8223 root@CONTAINER_IP
+  ```
+- **SOCKS5 Proxy:** Configure your browser or application to use `socks5://CONTAINER_IP:8222`
+- **HTTP Proxy:** Configure HTTP proxy settings with `http://CONTAINER_IP:8224`
+
+
+## Logs and Debugging
+- OpenConnect logs: `/var/log/openconnect.log`
+- SSH logs: `/var/log/sshd.log`
+- SOCKS5 logs: `/var/log/sockd.log`
+- TinyProxy logs: `/var/log/tinyproxy.log`
+
+To view logs:
+```sh
+docker logs -f openconnect-proxy-ssh
+```
+
+## Stop and Remove Container
+To stop the container:
+```sh
+docker-compose down
+```
+
 ## Configuration
 ### Docker Compose Setup
 ```yaml
@@ -187,56 +237,6 @@ Port 8224
 Listen 0.0.0.0
 Timeout 600
 Allow 0.0.0.0/0
-```
-
-## Usage
-
-### Retrieving VPN_SERVERCERT and VPN_AUTHGROUP
-To get the required VPN_SERVERCERT and VPN_AUTHGROUP, run the following command on a system with OpenConnect installed:
-```sh
-openconnect --authenticate --user=VPN_USERNAME VPN_SERVER
-```
-After entering your password, OpenConnect will display authentication groups. Choose the appropriate one, and the server certificate hash (usually in `pin-sha256:XYZ123` format) will be shown in the connection logs.
-
-### Using as a Jumphost
-To use this container as a jumphost for SSH connections, add the following to your `~/.ssh/config` file:
-```sh
-Host jumphost
-  HostName CONTAINER_IP
-  User root
-  Port 8223
-  IdentityFile /path/to/your/private/key
-  ForwardAgent yes
-```
-Then, use it to jump to another host:
-```sh
-ssh -J jumphost user@destination_host
-```
-
-### Standard Usage
-- **SSH Access:** Connect to the container with:
-  ```sh
-  ssh -p 8223 root@CONTAINER_IP
-  ```
-- **SOCKS5 Proxy:** Configure your browser or application to use `socks5://CONTAINER_IP:8222`
-- **HTTP Proxy:** Configure HTTP proxy settings with `http://CONTAINER_IP:8224`
-
-
-## Logs and Debugging
-- OpenConnect logs: `/var/log/openconnect.log`
-- SSH logs: `/var/log/sshd.log`
-- SOCKS5 logs: `/var/log/sockd.log`
-- TinyProxy logs: `/var/log/tinyproxy.log`
-
-To view logs:
-```sh
-docker logs -f openconnect-proxy-ssh
-```
-
-## Stop and Remove Container
-To stop the container:
-```sh
-docker-compose down
 ```
 
 ## License

@@ -189,6 +189,15 @@ Timeout 600
 Allow 0.0.0.0/0
 ```
 
+## Usage
+
+### Retrieving VPN_SERVERCERT and VPN_AUTHGROUP
+To get the required VPN_SERVERCERT and VPN_AUTHGROUP, run the following command on a system with OpenConnect installed:
+```sh
+openconnect --authenticate --user=VPN_USERNAME VPN_SERVER
+```
+After entering your password, OpenConnect will display authentication groups. Choose the appropriate one, and the server certificate hash (usually in `pin-sha256:XYZ123` format) will be shown in the connection logs.
+
 ### Using as a Jumphost
 To use this container as a jumphost for SSH connections, add the following to your `~/.ssh/config` file:
 ```sh
@@ -211,6 +220,7 @@ ssh -J jumphost user@destination_host
   ```
 - **SOCKS5 Proxy:** Configure your browser or application to use `socks5://CONTAINER_IP:8222`
 - **HTTP Proxy:** Configure HTTP proxy settings with `http://CONTAINER_IP:8224`
+
 
 ## Logs and Debugging
 - OpenConnect logs: `/var/log/openconnect.log`

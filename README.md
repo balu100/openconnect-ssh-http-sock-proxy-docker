@@ -5,7 +5,7 @@ This project provides a Dockerized environment to connect to an OpenConnect VPN 
 
 ## Features
 - OpenConnect VPN client for establishing secure connections
-- SSH server for secure remote access
+- SSH server for secure remote access and as jumphost
 - SOCKS5 proxy using Dante
 - HTTP proxy using TinyProxy
 - Automatic route configuration for local IPs
@@ -101,15 +101,61 @@ ENTRYPOINT ["/bin/sh", "/run.sh"]
 # Set root password
 echo "root:$ROOT_PASSWORD" | chpasswd
 
-# Configure SSH public key
-echo "$SSH_PUB_KEY" > /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
+# Set SSH public key if provided
+if [ -n "$SSH_PUB_KEY" ]; then
+    echo "$SSH_PUB_KEY" > /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+    echo "Public key added to /root/.ssh/authorized_keys"
+else
+    echo "WARNING: No SSH_PUB_KEY provided. SSH login might fail."
+fi
 
-# Start services
-/usr/sbin/sshd -D &
-echo "$VPN_PASSWORD" | openconnect --user="$VPN_USERNAME" --passwd-on-stdin --authgroup="$VPN_AUTHGROUP" --servercert "$VPN_SERVERCERT" "$VPN_SERVER" &
-/usr/bin/tinyproxy &
-/usr/sbin/sockd -D &
+# Define log files
+OPENCONNECT_LOG="/var/log/openconnect.log"
+SSHD_LOG="/var/log/sshd.log"
+SOCKD_LOG="/var/log/sockd.log"
+TINYPROXY_LOG="/var/log/tinyproxy.log"
+
+# Start the SSH daemon
+/usr/sbin/sshd -D >> "$SSHD_LOG" >&2 &
+
+# Check if necessary environment variables are set
+if [ -z "$VPN_SERVER" ] || [ -z "$VPN_USERNAME" ] || [ -z "$VPN_PASSWORD" ] || [ -z "$VPN_SERVERCERT" ]; then
+    echo "VPN_SERVER, VPN_USERNAME, VPN_PASSWORD, VPN_AUTHGROUP, and VPN_SERVERCERT environment variables must be set" >> "$OPENCONNECT_LOG" >&2 
+    exit 1
+fi
+
+# Start OpenConnect and log output
+echo "Starting OpenConnect..."
+echo "$VPN_PASSWORD" | openconnect --user="$VPN_USERNAME" --passwd-on-stdin --authgroup="$VPN_AUTHGROUP" --servercert "$VPN_SERVERCERT" "$VPN_SERVER" >> "$OPENCONNECT_LOG" 2>&1 &
+sleep 1
+/usr/bin/tinyproxy >> "$TINYPROXY_LOG" >&2 &
+/usr/sbin/sockd -D >> "$SOCKD_LOG" >&2 &
+
+
+GW=$(ip route | awk '/default/ {print $3}')
+i=1
+
+while [ -n "$(printenv KEEP_LOCAL_IP$i)" ]; do
+    ip route add "$(printenv KEEP_LOCAL_IP$i)" via "$GW" dev eth0
+    echo "Added route: $(printenv KEEP_LOCAL_IP$i) via $GW"
+    i=$((i + 1))
+done
+
+# Monitor the OpenConnect log for a BYE packet and exit the container when detected
+tail -f "$OPENCONNECT_LOG" | while IFS= read -r line; do
+    echo "$line"
+    if echo "$line" | grep -q "BYE"; then
+        echo "BYE packet detected. Exiting container."
+        # Optionally terminate background processes
+        pkill openconnect
+        pkill sshd
+        pkill tinyproxy
+        pkill sockd
+        pkill tail
+        exit 0
+    fi
+done
 ```
 
 ### SOCKS5 Configuration
@@ -117,18 +163,20 @@ echo "$VPN_PASSWORD" | openconnect --user="$VPN_USERNAME" --passwd-on-stdin --au
 sockd.conf:
 logoutput: stdout
 errorlog: stderr
+
 internal: 0.0.0.0 port = 8222
 external: tun0
+
 clientmethod: none
 socksmethod: none
 
 client pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: error connect disconnect
+        from: 0.0.0.0/0 to: 0.0.0.0/0
+        log: error connect disconnect
 }
 socks pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: error connect disconnect
+        from: 0.0.0.0/0 to: 0.0.0.0/0
+        log: error connect disconnect
 }
 ```
 
@@ -141,7 +189,22 @@ Timeout 600
 Allow 0.0.0.0/0
 ```
 
-## Usage
+### Using as a Jumphost
+To use this container as a jumphost for SSH connections, add the following to your `~/.ssh/config` file:
+```sh
+Host jumphost
+  HostName CONTAINER_IP
+  User root
+  Port 8223
+  IdentityFile /path/to/your/private/key
+  ForwardAgent yes
+```
+Then, use it to jump to another host:
+```sh
+ssh -J jumphost user@destination_host
+```
+
+### Standard Usage
 - **SSH Access:** Connect to the container with:
   ```sh
   ssh -p 8223 root@CONTAINER_IP

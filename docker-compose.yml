@@ -1,0 +1,24 @@
+services:
+  openconnect-proxy-ssh:
+    build: .
+    privileged: true  # Required for OpenConnect
+    volumes:
+      - ./sockd.conf:/etc/sockd.conf:ro
+      - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+    ports:
+      - "8224:8224"
+      - "8223:8223"
+      - "8222:8222"
+    environment:
+      VPN_SERVER: "VPN_SERVER_DNS_OR_IP"
+      VPN_USERNAME: "VPN_USERNAME"
+      VPN_PASSWORD: "VPN_PASSWORD"
+      VPN_AUTHGROUP: "VPN_AUTHGROUP" #Optional
+      VPN_SERVERCERT: "VPN_SERVERCERT_USUALLY_pin-sha256:XYZ123"
+      ROOT_PASSWORD: "ROOT_PASSWORD"
+      SSH_PUB_KEY: "YOUR_SSH_PUBLIC_KEY"
+      KEEP_LOCAL_IP1: "LOCAL_IP_THAT_WILL_CONNECT_TO_THE_CONTAINER"
+      KEEP_LOCAL_IP2: "LOCAL_IP2_THAT_WILL_CONNECT_TO_THE_CONTAINER"
+      #KEEP_LOCAL_IP3: "LOCAL_IP3_THAT_WILL_CONNECT_TO_THE_CONTAINER"
+      #KEEP_LOCAL_IP999: "LOCAL_IP999_THAT_WILL_CONNECT_TO_THE_CONTAINER"
+    restart: unless-stopped

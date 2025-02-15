@@ -1,7 +1,7 @@
 # OpenConnect Proxy SSH Container
 
 ## Overview
-This project provides a Dockerized environment to connect to an OpenConnect VPN and expose services such as SSH(+x11forwarding), SOCKS5, and HTTP proxy. The container is configured to handle secure authentication and routing while ensuring reliable VPN connectivity.
+This project provides a Dockerized environment to connect to an OpenConnect VPN and expose services such as SSH, SOCKS5, and HTTP proxy. The container is configured to handle secure authentication and routing while ensuring reliable VPN connectivity.
 
 ## Features
 - OpenConnect VPN client for establishing secure connections
@@ -116,96 +116,6 @@ services:
       KEEP_LOCAL_IP1: "LOCAL_IP_THAT_WILL_CONNECT_TO_THE_CONTAINER"
       KEEP_LOCAL_IP2: "LOCAL_IP2_THAT_WILL_CONNECT_TO_THE_CONTAINER"
     restart: unless-stopped
-```
-
-### Dockerfile
-```Dockerfile
-# Use the official Alpine base image
-FROM alpine
-
-# Copy the script to run OpenConnect and SSH
-COPY run.sh /run.sh
-
-# Install required packages
-RUN apk update && apk add --no-cache \
-    openssh openssl openconnect dante-server tinyproxy \
-    && mkdir -p /root/.ssh /var/run/sshd /var/run/sockd /var/run/tinyproxy \
-    && chmod 700 /root/.ssh \
-    && ssh-keygen -A
-
-# Configure SSHD
-RUN sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config \
-    && sed -i 's/^#\?AllowTcpForwarding .*/AllowTcpForwarding yes/' /etc/ssh/sshd_config \
-    && sed -i 's/^#\?GatewayPorts .*/GatewayPorts yes/' /etc/ssh/sshd_config \
-    && sed -i 's/^#\?Port .*/Port 8223/' /etc/ssh/sshd_config
-
-# Set permissions and entrypoint
-RUN chmod +x /run.sh
-ENTRYPOINT ["/bin/sh", "/run.sh"]
-```
-
-### Run Script
-```sh
-#!/bin/sh
-
-# Set root password
-echo "root:$ROOT_PASSWORD" | chpasswd
-
-# Set SSH public key if provided
-if [ -n "$SSH_PUB_KEY" ]; then
-    echo "$SSH_PUB_KEY" > /root/.ssh/authorized_keys
-    chmod 600 /root/.ssh/authorized_keys
-    echo "Public key added to /root/.ssh/authorized_keys"
-else
-    echo "WARNING: No SSH_PUB_KEY provided. SSH login might fail."
-fi
-
-# Define log files
-OPENCONNECT_LOG="/var/log/openconnect.log"
-SSHD_LOG="/var/log/sshd.log"
-SOCKD_LOG="/var/log/sockd.log"
-TINYPROXY_LOG="/var/log/tinyproxy.log"
-
-# Start the SSH daemon
-/usr/sbin/sshd -D >> "$SSHD_LOG" >&2 &
-
-# Check if necessary environment variables are set
-if [ -z "$VPN_SERVER" ] || [ -z "$VPN_USERNAME" ] || [ -z "$VPN_PASSWORD" ] || [ -z "$VPN_SERVERCERT" ]; then
-    echo "VPN_SERVER, VPN_USERNAME, VPN_PASSWORD, VPN_AUTHGROUP, and VPN_SERVERCERT environment variables must be set" >> "$OPENCONNECT_LOG" >&2 
-    exit 1
-fi
-
-# Start OpenConnect and log output
-echo "Starting OpenConnect..."
-echo "$VPN_PASSWORD" | openconnect --user="$VPN_USERNAME" --passwd-on-stdin --authgroup="$VPN_AUTHGROUP" --servercert "$VPN_SERVERCERT" "$VPN_SERVER" >> "$OPENCONNECT_LOG" 2>&1 &
-sleep 1
-/usr/bin/tinyproxy >> "$TINYPROXY_LOG" >&2 &
-/usr/sbin/sockd -D >> "$SOCKD_LOG" >&2 &
-
-
-GW=$(ip route | awk '/default/ {print $3}')
-i=1
-
-while [ -n "$(printenv KEEP_LOCAL_IP$i)" ]; do
-    ip route add "$(printenv KEEP_LOCAL_IP$i)" via "$GW" dev eth0
-    echo "Added route: $(printenv KEEP_LOCAL_IP$i) via $GW"
-    i=$((i + 1))
-done
-
-# Monitor the OpenConnect log for a BYE packet and exit the container when detected
-tail -f "$OPENCONNECT_LOG" | while IFS= read -r line; do
-    echo "$line"
-    if echo "$line" | grep -q "BYE"; then
-        echo "BYE packet detected. Exiting container."
-        # Optionally terminate background processes
-        pkill openconnect
-        pkill sshd
-        pkill tinyproxy
-        pkill sockd
-        pkill tail
-        exit 0
-    fi
-done
 ```
 
 ### SOCKS5 Configuration

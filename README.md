@@ -5,7 +5,7 @@ This project provides a Dockerized environment to connect to an OpenConnect VPN 
 
 ## Features
 - OpenConnect VPN client for establishing secure connections
-- SSH server for secure remote access and as jumphost
+- SSH server for secure remote access, X11 forwarding, and as jumphost
 - SOCKS5 proxy using Dante
 - HTTP proxy using TinyProxy
 - Automatic route configuration for local IPs
@@ -49,8 +49,8 @@ openconnect --authenticate --user=VPN_USERNAME VPN_SERVER
 ```
 After entering your password, OpenConnect will display authentication groups. Choose the appropriate one, and the server certificate hash (usually in `pin-sha256:XYZ123` format) will be shown in the connection logs.
 
-### Using as a Jumphost
-To use this container as a jumphost for SSH connections, add the following to your `~/.ssh/config` file:
+### Using as a Jumphost with X11 Forwarding
+To use this container as a jumphost for SSH connections with X11 forwarding, add the following to your `~/.ssh/config` file:
 ```sh
 Host jumphost
   HostName CONTAINER_IP
@@ -58,20 +58,21 @@ Host jumphost
   Port 8223
   IdentityFile /path/to/your/private/key
   ForwardAgent yes
+  ForwardX11 yes
+  ForwardX11Trusted yes
 ```
-Then, use it to jump to another host:
+Then, use it to jump to another host with X11 forwarding:
 ```sh
-ssh -J jumphost user@destination_host
+ssh -X -J jumphost user@destination_host
 ```
 
 ### Standard Usage
 - **SSH Access:** Connect to the container with:
   ```sh
-  ssh -p 8223 root@CONTAINER_IP
+  ssh -p 8223 root@CONTAINER_IP -X
   ```
 - **SOCKS5 Proxy:** Configure your browser or application to use `socks5://CONTAINER_IP:8222`
 - **HTTP Proxy:** Configure HTTP proxy settings with `http://CONTAINER_IP:8224`
-
 
 ## Logs and Debugging
 - OpenConnect logs: `/var/log/openconnect.log`
@@ -151,3 +152,4 @@ Allow 0.0.0.0/0
 
 ## License
 This project is licensed under the MIT License.
+

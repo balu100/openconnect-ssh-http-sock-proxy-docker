@@ -1,7 +1,7 @@
 # OpenConnect Proxy SSH Container
 
 ## Overview
-This project provides a Dockerized environment to connect to an OpenConnect VPN and expose services such as SSH, SOCKS5, and HTTP proxy. The container is configured to handle secure authentication and routing while ensuring reliable VPN connectivity.
+This project provides a Dockerized environment to connect to an OpenConnect VPN and expose services such as SSH(+x11forwarding), SOCKS5, and HTTP proxy. The container is configured to handle secure authentication and routing while ensuring reliable VPN connectivity.
 
 ## Features
 - OpenConnect VPN client for establishing secure connections

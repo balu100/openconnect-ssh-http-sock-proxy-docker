@@ -7,8 +7,8 @@ COPY run.sh /run.sh
 # Update package list
 RUN apk update
 
-# Install OpenSSH, OpenSSL, and OpenConnect
-RUN apk add --no-cache openssh openssl openconnect dante-server tinyproxy
+# Install OpenSSH, OpenSSL, OpenConnect, xauth and freefont (forx11forwarding)
+RUN apk add --no-cache openssh openssl openconnect dante-server tinyproxy xauth ttf-freefont
 
 # Create .ssh directory for root user
 RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh

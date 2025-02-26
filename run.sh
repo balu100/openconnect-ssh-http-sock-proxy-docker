@@ -30,7 +30,7 @@ fi
 # Start OpenConnect and log output
 echo "Starting OpenConnect..."
 echo "$VPN_PASSWORD" | openconnect --user="$VPN_USERNAME" --passwd-on-stdin --authgroup="$VPN_AUTHGROUP" --servercert "$VPN_SERVERCERT" "$VPN_SERVER" >> "$OPENCONNECT_LOG" 2>&1 &
-sleep 1
+sleep 5
 /usr/bin/tinyproxy >> "$TINYPROXY_LOG" >&2 &
 /usr/sbin/sockd -D >> "$SOCKD_LOG" >&2 &
 

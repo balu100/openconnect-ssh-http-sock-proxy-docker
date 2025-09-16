@@ -1,24 +1,31 @@
+---
 services:
-  openconnect-proxy-ssh:
+  vpn-ssh-container:
     build: .
+    container_name: vpn-ssh-container
     privileged: true  # Required for OpenConnect
     volumes:
       - ./sockd.conf:/etc/sockd.conf:ro
       - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
     ports:
-      - "8224:8224"
-      - "8223:8223"
-      - "8222:8222"
+      - "8225:8225" #SSH Tunnel B
+      - "8224:8224" #SSH Tunnel A
+      - "8224:8224" #http
+      - "8223:8223" #ssh
+      - "8222:8222" # socks5
     environment:
-      VPN_SERVER: "VPN_SERVER_DNS_OR_IP"
-      VPN_USERNAME: "VPN_USERNAME"
-      VPN_PASSWORD: "VPN_PASSWORD"
-      VPN_AUTHGROUP: "VPN_AUTHGROUP" #Optional
-      VPN_SERVERCERT: "VPN_SERVERCERT_USUALLY_pin-sha256:XYZ123"
-      ROOT_PASSWORD: "ROOT_PASSWORD"
-      SSH_PUB_KEY: "YOUR_SSH_PUBLIC_KEY"
-      KEEP_LOCAL_IP1: "LOCAL_IP_THAT_WILL_CONNECT_TO_THE_CONTAINER"
-      KEEP_LOCAL_IP2: "LOCAL_IP2_THAT_WILL_CONNECT_TO_THE_CONTAINER"
-      #KEEP_LOCAL_IP3: "LOCAL_IP3_THAT_WILL_CONNECT_TO_THE_CONTAINER"
-      #KEEP_LOCAL_IP999: "LOCAL_IP999_THAT_WILL_CONNECT_TO_THE_CONTAINER"
+      VPN_SERVER: "vpn.example.com"
+      VPN_USERNAME: "MyVpnUsername"
+      VPN_PASSWORD_BASE64: "MyVpnPasswordInBase64"
+      VPN_AUTHGROUP: "MyVpnAuthgroup"  #Optional
+      SSH_PRIVATEKEY_BASE64: "MySshPrivateForTunnl1And2InBase64"
+      ROOT_PASSWORD_BASE64: "RootPasswordInBase64"
+      SSH_PUB_KEY_BASE64: "MySshPublicKeyToConnectToThisVia8223InBase64"
+      SSH_TUNNEL_HOST_A: "AdditionalTunnelToUseItWillRunOn8224"
+      SSH_TUNNEL_HOST_B: "AdditionalTunnelToUseItWillRunOn8225"
+      SSH_TUNNEL_USER: "MySshUsernameForTunnl1And2"
+      KEEP_LOCAL_IP1: "PcIpThatIWillConnectFromToThisContainer"
+      KEEP_LOCAL_IP2: "Pc2IpThatIWillConnectFromToThisContainer"
+      #KEEP_LOCAL_IP3: "192.168.1.3"
+      #KEEP_LOCAL_IP999: "192.168.1.4"
     restart: unless-stopped

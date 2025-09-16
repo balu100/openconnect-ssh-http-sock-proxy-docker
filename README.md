@@ -76,7 +76,7 @@ base64 -w0 < file > file.b64
 # macOS
 base64 < file | tr -d '\n' > file.b64
 # Windows
-https://tools.ebalazs.com/base64-string-converter
+https://it-tools.tech/base64-string-converter
 ```
 
 ---

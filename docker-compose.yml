@@ -8,8 +8,8 @@ services:
       - ./sockd.conf:/etc/sockd.conf:ro
       - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
     ports:
-      - "8225:8225" #SSH Tunnel B
-      - "8224:8224" #SSH Tunnel A
+      - "8226:8226" #SSH Tunnel B
+      - "8225:8225" #SSH Tunnel A
       - "8224:8224" #http
       - "8223:8223" #ssh
       - "8222:8222" # socks5

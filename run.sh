@@ -89,7 +89,7 @@ if [ -n "$SSH_TUNNEL_USER" ] && [ -n "$SSH_TUNNEL_HOST_A" ] && [ -n "$SSH_TUNNEL
     # Tunnel for Site A (SOCKS Proxy on port 8225)
     echo "--> Starting tunnel to $SSH_TUNNEL_HOST_A on local port 8225"
     autossh -M 0 -f -tt -A \
-        -D 8225 \
+        -D 0.0.0.0:8225 \
         -o "ServerAliveInterval=60" \
         -o "ServerAliveCountMax=3" \
         -o "ExitOnForwardFailure=yes" \
@@ -99,7 +99,7 @@ if [ -n "$SSH_TUNNEL_USER" ] && [ -n "$SSH_TUNNEL_HOST_A" ] && [ -n "$SSH_TUNNEL
     # Tunnel for Site B (SOCKS Proxy on port 8226)
     echo "--> Starting tunnel to $SSH_TUNNEL_HOST_B on local port 8226"
     autossh -M 0 -f -tt -A \
-        -D 8226 \
+        -D 0.0.0.0:8226 \
         -o "ServerAliveInterval=60" \
         -o "ServerAliveCountMax=3" \
         -o "ExitOnForwardFailure=yes" \

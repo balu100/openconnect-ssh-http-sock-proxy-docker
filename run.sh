@@ -1,127 +1,207 @@
 #!/bin/sh
+set -Eeuo pipefail
 
-# Set root password
-echo "root:$(echo "$ROOT_PASSWORD_BASE64" | base64 -d)" | chpasswd
+###############################################################################
+# 0) UNIFIED LOGGING
+###############################################################################
+ALL_LOG="/var/log/stack.log"
+mkdir -p /var/log; : >"$ALL_LOG"
 
-# 1) Start agent and create a global environment file
-AGENT_ENV_FILE="/root/.ssh/agent.env"
-ssh-agent -s > "$AGENT_ENV_FILE"
-sed -i '/^echo Agent pid/d' "$AGENT_ENV_FILE"
-source "$AGENT_ENV_FILE"
-trap 'kill $SSH_AGENT_PID >/dev/null 2>&1' EXIT
+# Save original stdout for console-only prints (bypass tee)
+exec 3>&1
 
-# 2) Load private key (if provided)
-if [ -n "${SSH_PRIVATEKEY_BASE64:-}" ]; then
-  umask 177
-  KEYFILE="$(mktemp /root/.ssh/key.XXXXXX)"
-  echo "$SSH_PRIVATEKEY_BASE64" | base64 -d > "$KEYFILE"
-  chmod 600 "$KEYFILE"
-  ssh-add "$KEYFILE"
-  shred -u "$KEYFILE" || rm -f "$KEYFILE"
-fi
+# Mirror all normal output to file + docker logs
+exec > >(tee -a "$ALL_LOG") 2>&1
 
-# 3) Verify agent has keys
-ssh-add -l || true
+###############################################################################
+# 1) BASICS: ROOT PASSWORD, SSH AGENT, AUTHORIZED KEYS
+###############################################################################
+set_root_password() {
+  echo "root:$(echo "$ROOT_PASSWORD_BASE64" | base64 -d)" | chpasswd
+}
 
-# Set SSH public key if provided
-if [ -n "$SSH_PUB_KEY_BASE64" ]; then
+start_ssh_agent() {
+  AGENT_ENV_FILE="/root/.ssh/agent.env"
+  ssh-agent -s > "$AGENT_ENV_FILE"
+  sed -i '/^echo Agent pid/d' "$AGENT_ENV_FILE"
+  # shellcheck disable=SC1090
+  . "$AGENT_ENV_FILE"
+  trap 'kill $SSH_AGENT_PID >/dev/null 2>&1' EXIT
+}
+
+load_private_key() {
+  if [ -n "${SSH_PRIVATEKEY_BASE64:-}" ]; then
+    umask 177
+    KEYFILE="$(mktemp /root/.ssh/key.XXXXXX)"
+    echo "$SSH_PRIVATEKEY_BASE64" | base64 -d > "$KEYFILE"
+    chmod 600 "$KEYFILE"
+    ssh-add "$KEYFILE"
+    shred -u "$KEYFILE" || rm -f "$KEYFILE"
+  fi
+  ssh-add -l || true
+}
+
+set_authorized_keys() {
+  if [ -n "${SSH_PUB_KEY_BASE64:-}" ]; then
     echo "$SSH_PUB_KEY_BASE64" | base64 -d > /root/.ssh/authorized_keys
     chmod 600 /root/.ssh/authorized_keys
     echo "Public key added to /root/.ssh/authorized_keys"
-else
+  else
     echo "WARNING: No SSH_PUB_KEY_BASE64 provided. SSH login might fail."
-fi
+  fi
+}
 
-# Define log files
-OPENCONNECT_LOG="/var/log/openconnect.log"
-SSHD_LOG="/var/log/sshd.log"
-SOCKD_LOG="/var/log/sockd.log"
-TINYPROXY_LOG="/var/log/tinyproxy.log"
+###############################################################################
+# 2) SERVICES: SSHD, TINYPROXY, SOCKD
+###############################################################################
+start_sshd() {
+  /usr/sbin/sshd -D &
+}
 
-# Start the SSH daemon
-/usr/sbin/sshd -D >> "$SSHD_LOG" >&2 &
+start_tinyproxy() {
+  # Tip: set User/Group in /etc/tinyproxy/tinyproxy.conf to drop root
+  /usr/bin/tinyproxy -d &
+}
 
-# Get servercert via hostname
-VPN_SERVERCERT=$(
-  openssl s_client -connect "$VPN_SERVER:443" -servername "$VPN_SERVER" </dev/null 2>/dev/null \
-  | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
-  | openssl x509 -pubkey -noout \
-  | openssl pkey -pubin -outform DER \
-  | openssl dgst -sha256 -binary \
-  | openssl base64 -A \
-  | awk '{print "pin-sha256:" $0}'
-)
-[ -n "$VPN_SERVERCERT" ] || { echo "pin generation failed" >&2; exit 2; }
-export VPN_SERVERCERT
+start_sockd() {
+  # Tip: set 'user.notprivileged: nobody' in danted.conf to drop root
+  /usr/sbin/sockd -D &
+}
 
-# Check if necessary environment variables are set
-if [ -z "$VPN_SERVER" ] || [ -z "$VPN_USERNAME" ] || [ -z "$VPN_PASSWORD_BASE64" ]; then
-    echo "VPN_SERVER, VPN_USERNAME, VPN_PASSWORD_BASE64 and VPN_AUTHGROUP environment variables must be set" >> "$OPENCONNECT_LOG" >&2 
+###############################################################################
+# 3) OPENCONNECT: CERT PIN, START, ROUTES
+###############################################################################
+pin_server_cert() {
+  VPN_SERVERCERT=$(
+    openssl s_client -connect "$VPN_SERVER:443" -servername "$VPN_SERVER" </dev/null 2>/dev/null \
+    | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
+    | openssl x509 -pubkey -noout \
+    | openssl pkey -pubin -outform DER \
+    | openssl dgst -sha256 -binary \
+    | openssl base64 -A \
+    | awk '{print "pin-sha256:" $0}'
+  )
+  [ -n "$VPN_SERVERCERT" ] || { echo "pin generation failed"; exit 2; }
+  export VPN_SERVERCERT
+}
+
+validate_vpn_env() {
+  if [ -z "${VPN_SERVER:-}" ] || [ -z "${VPN_USERNAME:-}" ] || [ -z "${VPN_PASSWORD_BASE64:-}" ]; then
+    echo "VPN_SERVER, VPN_USERNAME, VPN_PASSWORD_BASE64 and VPN_AUTHGROUP environment variables must be set"
     exit 1
-fi
+  fi
+}
 
-# Start OpenConnect and log output
-echo "Starting OpenConnect..."
-echo "$(echo "$VPN_PASSWORD_BASE64" | base64 -d)" | openconnect --user="$VPN_USERNAME" --passwd-on-stdin --authgroup="$VPN_AUTHGROUP" --servercert "$VPN_SERVERCERT" "$VPN_SERVER" >> "$OPENCONNECT_LOG" 2>&1 &
+start_openconnect() {
+  echo "Starting OpenConnect..."
+  echo "$(echo "$VPN_PASSWORD_BASE64" | base64 -d)" \
+    | openconnect --timestamp \
+        --user="$VPN_USERNAME" --passwd-on-stdin \
+        --authgroup="${VPN_AUTHGROUP:-}" --servercert "$VPN_SERVERCERT" \
+        "$VPN_SERVER" &
+}
 
-# Give the VPN a few seconds to establish the connection and routes
-sleep 2
-
-# Start other proxies
-/usr/bin/tinyproxy >> "$TINYPROXY_LOG" >&2 &
-/usr/sbin/sockd -D >> "$SOCKD_LOG" >&2 &
-
-# Add custom local routes
-GW=$(ip route | awk '/default/ {print $3}')
-i=1
-while [ -n "$(printenv KEEP_LOCAL_IP$i)" ]; do
-    ip route add "$(printenv KEEP_LOCAL_IP$i)" via "$GW" dev eth0
-    echo "Added route: $(printenv KEEP_LOCAL_IP$i) via $GW"
-    i=$((i + 1))
-done
-
-# =================================================================
-# START AUTOSSH TUNNELS (INSERTED HERE)
-# =================================================================
-if [ -n "$SSH_TUNNEL_USER" ] && [ -n "$SSH_TUNNEL_HOST_A" ] && [ -n "$SSH_TUNNEL_HOST_B" ]; then
-    echo "Starting persistent tunnels for user $SSH_TUNNEL_USER..."
-
-    # Tunnel for Site A (SOCKS Proxy on port 8225)
-    echo "--> Starting tunnel to $SSH_TUNNEL_HOST_A on local port 8225"
-    autossh -M 0 -f -tt -A \
-        -D 0.0.0.0:8225 \
-        -o "ServerAliveInterval=60" \
-        -o "ServerAliveCountMax=3" \
-        -o "ExitOnForwardFailure=yes" \
-        -o "StrictHostKeyChecking=no" \
-        "$SSH_TUNNEL_USER@$SSH_TUNNEL_HOST_A"
-
-    # Tunnel for Site B (SOCKS Proxy on port 8226)
-    echo "--> Starting tunnel to $SSH_TUNNEL_HOST_B on local port 8226"
-    autossh -M 0 -f -tt -A \
-        -D 0.0.0.0:8226 \
-        -o "ServerAliveInterval=60" \
-        -o "ServerAliveCountMax=3" \
-        -o "ExitOnForwardFailure=yes" \
-        -o "StrictHostKeyChecking=no" \
-        "$SSH_TUNNEL_USER@$SSH_TUNNEL_HOST_B"
-else
-    echo "SSH tunnel environment variables not set. Skipping."
-fi
-
-# Monitor the OpenConnect log for a BYE packet and exit the container when detected
-echo "Setup complete. Monitoring VPN connection for disconnect signals..."
-tail -f "$OPENCONNECT_LOG" | while IFS= read -r line; do
-    echo "$line"
-    if echo "$line" | grep -q "BYE"; then
-        echo "BYE packet detected. Exiting container."
-        # Optionally terminate background processes
-        pkill openconnect
-        pkill sshd
-        pkill tinyproxy
-        pkill sockd
-        pkill tail
-        pkill autossh
-        exit 0
+wait_for_openconnect() {
+  echo "Waiting for tun0 IPv4..."
+  for i in $(seq 1 60); do
+    if ip -o -4 addr show dev tun0 2>/dev/null | grep -q 'inet '; then
+      echo "tun0 has IPv4."
+      return 0
     fi
-done
+    sleep 1
+  done
+  echo "tun0 did not get IPv4 in 60s"; return 1
+}
+
+add_routes() {
+  i=1
+  while :; do
+    cidr="$(printenv KEEP_LOCAL_IP$i || true)"
+    [ -n "$cidr" ] || break
+    ip route replace "$cidr" via "$ORIGINAL_GW" dev "$ORIGINAL_IFACE" || true
+    echo "Pinned $cidr via $ORIGINAL_GW on $ORIGINAL_IFACE"
+    i=$((i+1))
+  done
+}
+
+###############################################################################
+# 4) AUTOSSH TUNNELS: QUIET BACKGROUND
+###############################################################################
+start_autossh() {
+  export AUTOSSH_GATETIME=0
+  export AUTOSSH_LOGLEVEL=1
+  export AUTOSSH_LOGFILE="/var/log/stack.log"
+
+  if [ -n "${SSH_TUNNEL_USER:-}" ] && [ -n "${SSH_TUNNEL_HOST_A:-}" ] && [ -n "${SSH_TUNNEL_HOST_B:-}" ]; then
+    echo "Configuring autossh tunnels..."
+    echo "Background mode → Site A:8225, Site B:8226."
+
+    # Site A
+    autossh -M 0 -tt -A \
+      -D 0.0.0.0:8225 \
+      -o ServerAliveInterval=60 \
+      -o ServerAliveCountMax=3 \
+      -o ExitOnForwardFailure=yes \
+      -o StrictHostKeyChecking=no \
+      -q -o LogLevel=ERROR \
+      "$SSH_TUNNEL_USER@$SSH_TUNNEL_HOST_A" \
+      </dev/null >/dev/null 2>&1 &
+
+    # Site B
+    autossh -M 0 -tt -A \
+      -D 0.0.0.0:8226 \
+      -o ServerAliveInterval=60 \
+      -o ServerAliveCountMax=3 \
+      -o ExitOnForwardFailure=yes \
+      -o StrictHostKeyChecking=no \
+      -q -o LogLevel=ERROR \
+      "$SSH_TUNNEL_USER@$SSH_TUNNEL_HOST_B" \
+      </dev/null >/dev/null 2>&1 &
+  else
+    echo "SSH tunnel environment variables not set. Skipping."
+  fi
+}
+
+
+###############################################################################
+# 5) MONITOR: STREAM LOGS TO CONSOLE, EXIT ON 'BYE'
+###############################################################################
+monitor_and_exit_on_bye() {
+  echo "Setup complete. Monitoring for disconnect signals in $ALL_LOG..." >&3
+  tail -Fn0 "$ALL_LOG" | while IFS= read -r line; do
+    printf '%s\n' "$line" >&3      # print to original stdout only (no re-append)
+    case "$line" in
+      *BYE*)
+        echo "BYE packet detected. Exiting container." >&3
+        pkill openconnect || true
+        pkill sshd || true
+        pkill tinyproxy || true
+        pkill sockd || true
+        pkill autossh || true
+        exit 0
+        ;;
+    esac
+  done
+}
+
+###############################################################################
+# MAIN
+###############################################################################
+set_root_password
+start_ssh_agent
+load_private_key
+set_authorized_keys
+
+start_sshd
+
+pin_server_cert
+validate_vpn_env
+ORIGINAL_GW="$(ip route show default | awk '{print $3; exit}')"
+ORIGINAL_IFACE="$(ip route show default | awk '{print $5; exit}')"
+start_openconnect
+wait_for_openconnect
+start_tinyproxy
+start_sockd
+add_routes
+start_autossh
+monitor_and_exit_on_bye

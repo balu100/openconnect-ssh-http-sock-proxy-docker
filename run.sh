@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# 0) UNIFIED LOGGING
+# 0) UNIFIED LOGGING (no feedback loop)
 ###############################################################################
 ALL_LOG="/var/log/stack.log"
 mkdir -p /var/log; : >"$ALL_LOG"
@@ -171,7 +171,7 @@ monitor_and_exit_on_bye() {
   tail -Fn0 "$ALL_LOG" | while IFS= read -r line; do
     printf '%s\n' "$line" >&3      # print to original stdout only (no re-append)
     case "$line" in
-      *BYE*)
+      *BYE*|*exiting*|*Reconnect\ failed*|*returned\ error*)
         echo "BYE packet detected. Exiting container." >&3
         pkill openconnect || true
         pkill sshd || true

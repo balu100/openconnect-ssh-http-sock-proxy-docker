@@ -3,29 +3,47 @@ services:
   vpn-ssh-container:
     build: .
     container_name: vpn-ssh-container
-    privileged: true  # Required for OpenConnect
+    privileged: true  # Required for OpenConnect (tun device)
     volumes:
       - ./sockd.conf:/etc/sockd.conf:ro
       - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
     ports:
-      - "8226:8226" #SSH Tunnel B
-      - "8225:8225" #SSH Tunnel A
-      - "8224:8224" #http
-      - "8223:8223" #ssh
-      - "8222:8222" # socks5
+      - "8999:8999" # Tunnel 999 (example)
+      - "8226:8226" # Tunnel 2
+      - "8225:8225" # Tunnel 1
+      - "8224:8224" # HTTP (tinyproxy)
+      - "8223:8223" # SSH into container
+      - "8222:8222" # SOCKS5 (danted)
     environment:
       VPN_SERVER: "vpn.example.com"
       VPN_USERNAME: "MyVpnUsername"
       VPN_PASSWORD_BASE64: "MyVpnPasswordInBase64"
-      VPN_AUTHGROUP: "MyVpnAuthgroup"  #Optional
-      SSH_PRIVATEKEY_BASE64: "MySshPrivateForTunnl1And2InBase64"
+      VPN_AUTHGROUP: "MyVpnAuthgroup"  # Optional
+
+      SSH_PRIVATEKEY_BASE64: "MySshPrivateKeyInBase64"
       ROOT_PASSWORD_BASE64: "RootPasswordInBase64"
       SSH_PUB_KEY_BASE64: "MySshPublicKeyToConnectToThisVia8223InBase64"
-      SSH_TUNNEL_HOST_A: "AdditionalTunnelToUseItWillRunOn8224"
-      SSH_TUNNEL_HOST_B: "AdditionalTunnelToUseItWillRunOn8225"
-      SSH_TUNNEL_USER: "MySshUsernameForTunnl1And2"
-      KEEP_LOCAL_IP1: "PcIpThatIWillConnectFromToThisContainer"
-      KEEP_LOCAL_IP2: "Pc2IpThatIWillConnectFromToThisContainer"
-      #KEEP_LOCAL_IP3: "192.168.1.3"
-      #KEEP_LOCAL_IP999: "192.168.1.4"
+
+      # --- Dynamic autossh tunnels (numbered; can be sparse: 1, 2, 999, etc.) ---
+
+      # Tunnel 1
+      SSH_TUNNEL1_HOST: "10.0.0.10"
+      SSH_TUNNEL1_USER: "myuser"
+      SSH_TUNNEL1_BIND: "0.0.0.0:8225"
+
+      # Tunnel 2
+      SSH_TUNNEL2_HOST: "10.0.0.11"
+      SSH_TUNNEL2_USER: "myuser"
+      SSH_TUNNEL2_BIND: "0.0.0.0:8226"
+
+      # Tunnel 999 (example to show “no practical limit”)
+      SSH_TUNNEL999_HOST: "10.0.0.99"
+      SSH_TUNNEL999_USER: "myuser"
+      SSH_TUNNEL999_BIND: "0.0.0.0:8999"
+
+      # Keep-local routes (optional)
+      KEEP_LOCAL_IP1: "192.168.1.10"
+      KEEP_LOCAL_IP2: "192.168.1.11"
+      #KEEP_LOCAL_IP3: "192.168.1.12"
+      #KEEP_LOCAL_IP999: "192.168.1.13"
     restart: unless-stopped

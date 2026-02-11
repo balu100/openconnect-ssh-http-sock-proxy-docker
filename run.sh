@@ -5,13 +5,30 @@ set -Eeuo pipefail
 # 0) UNIFIED LOGGING (no feedback loop)
 ###############################################################################
 ALL_LOG="/var/log/stack.log"
-mkdir -p /var/log; : >"$ALL_LOG"
+mkdir -p /var/log
+: >"$ALL_LOG"
 
 # Save original stdout for console-only prints (bypass tee)
 exec 3>&1
 
-# Mirror all normal output to file + docker logs
-exec > >(tee -a "$ALL_LOG") 2>&1
+# FIFO-based tee: mirror all stdout/stderr to file + original stdout (docker logs)
+LOG_FIFO="/tmp/stack.log.fifo"
+rm -f "$LOG_FIFO"
+mkfifo "$LOG_FIFO"
+
+# Start tee reader FIRST (so writers won't block)
+tee -a "$ALL_LOG" <"$LOG_FIFO" >&3 &
+TEE_PID=$!
+
+cleanup_logging() {
+  # close redirected fds (best-effort), stop tee, remove fifo
+  kill "$TEE_PID" >/dev/null 2>&1 || true
+  rm -f "$LOG_FIFO" >/dev/null 2>&1 || true
+}
+trap cleanup_logging EXIT INT TERM
+
+# Redirect all subsequent stdout/stderr into fifo
+exec >"$LOG_FIFO" 2>&1
 
 ###############################################################################
 # 1) BASICS: ROOT PASSWORD, SSH AGENT, AUTHORIZED KEYS
@@ -87,7 +104,7 @@ pin_server_cert() {
 
 validate_vpn_env() {
   if [ -z "${VPN_SERVER:-}" ] || [ -z "${VPN_USERNAME:-}" ] || [ -z "${VPN_PASSWORD_BASE64:-}" ]; then
-    echo "VPN_SERVER, VPN_USERNAME, VPN_PASSWORD_BASE64 and VPN_AUTHGROUP environment variables must be set"
+    echo "VPN_SERVER, VPN_USERNAME and VPN_PASSWORD_BASE64 environment variables must be set"
     exit 1
   fi
 }
@@ -125,43 +142,50 @@ add_routes() {
 }
 
 ###############################################################################
-# 4) AUTOSSH TUNNELS: QUIET BACKGROUND
+# 4) AUTOSSH TUNNELS: QUIET BACKGROUND (dynamic from env)
 ###############################################################################
-start_autossh() {
+start_autossh_dynamic() {
   export AUTOSSH_GATETIME=0
   export AUTOSSH_LOGLEVEL=1
   export AUTOSSH_LOGFILE="/var/log/stack.log"
 
-  if [ -n "${SSH_TUNNEL_USER:-}" ] && [ -n "${SSH_TUNNEL_HOST_A:-}" ] && [ -n "${SSH_TUNNEL_HOST_B:-}" ]; then
-    echo "Configuring autossh tunnels..."
-    echo "Background mode → Site A:8225, Site B:8226."
+  SSH_COMMON_OPTS='
+    -o ServerAliveInterval=60
+    -o ServerAliveCountMax=3
+    -o ExitOnForwardFailure=yes
+    -o StrictHostKeyChecking=no
+    -o UserKnownHostsFile=/dev/null
+    -q -o LogLevel=ERROR
+  '
 
-    # Site A
-    autossh -M 0 -tt -A \
-      -D 0.0.0.0:8225 \
-      -o ServerAliveInterval=60 \
-      -o ServerAliveCountMax=3 \
-      -o ExitOnForwardFailure=yes \
-      -o StrictHostKeyChecking=no \
-      -q -o LogLevel=ERROR \
-      "$SSH_TUNNEL_USER@$SSH_TUNNEL_HOST_A" \
-      </dev/null >/dev/null 2>&1 &
+  found=0
 
-    # Site B
+  for idx in $(
+    printenv | awk -F= '/^SSH_TUNNEL[0-9]+_HOST=/{sub(/^SSH_TUNNEL/,"",$1); sub(/_HOST$/,"",$1); print $1}' | sort -n
+  ); do
+    eval "host=\${SSH_TUNNEL${idx}_HOST:-}"
+    eval "user=\${SSH_TUNNEL${idx}_USER:-}"
+    eval "bind=\${SSH_TUNNEL${idx}_BIND:-}"
+    eval "opts=\${SSH_TUNNEL${idx}_OPTS:-}"
+
+    if [ -z "$host" ] || [ -z "$user" ] || [ -z "$bind" ]; then
+      echo "SSH_TUNNEL${idx}: missing HOST/USER/BIND, skipping (HOST='$host' USER='$user' BIND='$bind')"
+      continue
+    fi
+
+    found=1
+    echo "autossh: starting SSH_TUNNEL${idx} → SOCKS on $bind via ${user}@${host}"
+
     autossh -M 0 -tt -A \
-      -D 0.0.0.0:8226 \
-      -o ServerAliveInterval=60 \
-      -o ServerAliveCountMax=3 \
-      -o ExitOnForwardFailure=yes \
-      -o StrictHostKeyChecking=no \
-      -q -o LogLevel=ERROR \
-      "$SSH_TUNNEL_USER@$SSH_TUNNEL_HOST_B" \
+      -D "$bind" \
+      $SSH_COMMON_OPTS \
+      $opts \
+      "${user}@${host}" \
       </dev/null >/dev/null 2>&1 &
-  else
-    echo "SSH tunnel environment variables not set. Skipping."
-  fi
+  done
+
+  [ "$found" -eq 1 ] || echo "No SSH_TUNNEL<N>_HOST found. Skipping autossh."
 }
-
 
 ###############################################################################
 # 5) MONITOR: STREAM LOGS TO CONSOLE, EXIT ON 'BYE'
@@ -203,5 +227,5 @@ wait_for_openconnect
 start_tinyproxy
 start_sockd
 add_routes
-start_autossh
+start_autossh_dynamic
 monitor_and_exit_on_bye

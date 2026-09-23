@@ -1,49 +1,121 @@
----
 services:
   vpn-ssh-container:
     build: .
     container_name: vpn-ssh-container
-    privileged: true  # Required for OpenConnect (tun device)
+
+    # Required by this OpenConnect setup.
+    security_opt:
+      - seccomp=unconfined
+
+    cap_add:
+      - NET_ADMIN
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
     volumes:
       - ./sockd.conf:/etc/sockd.conf:ro
       - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+
+    # Safe default: expose services only on the Docker host itself.
+    # Set HOST_BIND_IP=0.0.0.0 in .env if remote/LAN clients must connect.
+    # WARNING: the example proxy configs do not require client authentication.
     ports:
-      - "8999:8999" # Tunnel 999 (example)
-      - "8226:8226" # Tunnel 2
-      - "8225:8225" # Tunnel 1
-      - "8224:8224" # HTTP (tinyproxy)
-      - "8223:8223" # SSH into container
-      - "8222:8222" # SOCKS5 (danted)
+      - "${HOST_BIND_IP:-127.0.0.1}:8999:8999" # AutoSSH Tunnel 999 example
+      - "${HOST_BIND_IP:-127.0.0.1}:8226:8226" # AutoSSH Tunnel 2
+      - "${HOST_BIND_IP:-127.0.0.1}:8225:8225" # AutoSSH Tunnel 1
+      - "${HOST_BIND_IP:-127.0.0.1}:8224:8224" # HTTP proxy
+      - "${HOST_BIND_IP:-127.0.0.1}:8223:8223" # SSH
+      - "${HOST_BIND_IP:-127.0.0.1}:8222:8222" # SOCKS5
+
     environment:
       VPN_SERVER: "vpn.example.com"
+      VPN_PORT: "443"
       VPN_USERNAME: "MyVpnUsername"
-      VPN_PASSWORD_BASE64: "MyVpnPasswordInBase64"
-      VPN_AUTHGROUP: "MyVpnAuthgroup"  # Optional
+      VPN_PASSWORD_BASE64: "Base64VpnPassword"
+      VPN_AUTHGROUP: "MyVpnAuthgroup" # Optional
 
-      SSH_PRIVATEKEY_BASE64: "MySshPrivateKeyInBase64"
-      ROOT_PASSWORD_BASE64: "RootPasswordInBase64"
-      SSH_PUB_KEY_BASE64: "MySshPublicKeyToConnectToThisVia8223InBase64"
+      # Optional but recommended for real certificate pinning.
+      # Without this, run.sh discovers and trusts the pin seen at startup.
+      #VPN_SERVERCERT: "pin-sha256:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX="
 
-      # --- Dynamic autossh tunnels (numbered; can be sparse: 1, 2, 999, etc.) ---
+      # Seconds OpenConnect may reconnect after a disconnect/DPD event.
+      # 0 = exit immediately and let Docker restart the whole container.
+      VPN_RECONNECT_TIMEOUT: "0"
+
+      # Private key loaded into ssh-agent for AutoSSH.
+      SSH_PRIVATEKEY_BASE64: "Base64PrivateKeyForTunnels"
+
+      # SSH access to this container on port 8223.
+      ROOT_PASSWORD_BASE64: "Base64RootPassword"
+      SSH_PUB_KEY_BASE64: "Base64PublicKeyForContainerSSH"
+
+      # -----------------------------------------------------------------------
+      # Dynamic AutoSSH SOCKS tunnels
+      #
+      # Numbering can be sparse: 1, 2, 999, ...
+      # TEST_HOST/TEST_PORT are optional, but strongly recommended:
+      # they verify that the SOCKS tunnel can actually reach something behind
+      # the SSH/SCB gateway rather than merely checking that a listener exists.
+      # TEST_PORT defaults to 22 when TEST_HOST is set.
+      # -----------------------------------------------------------------------
 
       # Tunnel 1
+      SSH_TUNNEL1_NAME: "ExampleA"
       SSH_TUNNEL1_HOST: "10.0.0.10"
       SSH_TUNNEL1_USER: "myuser"
       SSH_TUNNEL1_BIND: "0.0.0.0:8225"
+      SSH_TUNNEL1_TEST_HOST: "10.0.10.10"
+      SSH_TUNNEL1_TEST_PORT: "22"
 
       # Tunnel 2
+      SSH_TUNNEL2_NAME: "ExampleB"
       SSH_TUNNEL2_HOST: "10.0.0.11"
       SSH_TUNNEL2_USER: "myuser"
       SSH_TUNNEL2_BIND: "0.0.0.0:8226"
+      SSH_TUNNEL2_TEST_HOST: "10.0.11.10"
+      SSH_TUNNEL2_TEST_PORT: "22"
 
-      # Tunnel 999 (example to show “no practical limit”)
+      # Tunnel 999 - demonstrates sparse numbering
+      SSH_TUNNEL999_NAME: "ExampleSparse"
       SSH_TUNNEL999_HOST: "10.0.0.99"
       SSH_TUNNEL999_USER: "myuser"
       SSH_TUNNEL999_BIND: "0.0.0.0:8999"
+      SSH_TUNNEL999_TEST_HOST: "10.0.99.10"
+      SSH_TUNNEL999_TEST_PORT: "22"
 
-      # Keep-local routes (optional)
-      KEEP_LOCAL_IP1: "192.168.1.10"
-      KEEP_LOCAL_IP2: "192.168.1.11"
-      #KEEP_LOCAL_IP3: "192.168.1.12"
-      #KEEP_LOCAL_IP999: "192.168.1.13"
+      # Optional per-tunnel SSH options. Keep these to simple SSH tokens.
+      #SSH_TUNNEL1_OPTS: "-p 2222"
+
+      # -----------------------------------------------------------------------
+      # Keep-local routing exceptions
+      #
+      # These are forced through the original Docker interface instead of tun0.
+      # Numbering may also be sparse.
+      # -----------------------------------------------------------------------
+      #KEEP_LOCAL_IP1: "192.168.1.10"
+      #KEEP_LOCAL_IP2: "192.168.1.11"
+      #KEEP_LOCAL_IP999: "192.168.1.254"
+
+      # Optional watchdog tuning.
+      #WATCHDOG_START_DELAY: "60"
+      #WATCHDOG_INTERVAL: "30"
+      #WATCHDOG_FAILURE_LIMIT: "10"
+      #WATCHDOG_CHECK_TIMEOUT: "20"
+
     restart: unless-stopped
+    stop_grace_period: 20s
+
+    # Overrides the image HEALTHCHECK timings for this Compose deployment.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/bin/sh",
+          "/usr/local/bin/healthcheck.sh"
+        ]
+      start_period: 180s
+      start_interval: 20s
+      interval: 30s
+      timeout: 20s
+      retries: 3

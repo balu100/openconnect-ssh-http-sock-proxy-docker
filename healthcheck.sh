@@ -64,6 +64,25 @@ is_listening_by_process() {
         '
 }
 
+is_listening() {
+    port="$1"
+
+    ss -Hlnt 2>/dev/null |
+        awk -v port="$port" '
+            {
+                for (i = 1; i <= NF; i++) {
+                    if ($i ~ (":" port "$")) {
+                        found = 1
+                        exit
+                    }
+                }
+            }
+            END {
+                exit !found
+            }
+        '
+}
+
 route_device_for() {
     target="$1"
 
@@ -81,13 +100,13 @@ route_device_for() {
 ###############################################################################
 # Local services
 ###############################################################################
-is_listening_by_process 8222 sockd ||
+is_listening 8222 ||
     fail_now "dante/sockd is not listening on 8222"
 
-is_listening_by_process 8223 sshd ||
+is_listening 8223 ||
     fail_now "sshd is not listening on 8223"
 
-is_listening_by_process 8224 tinyproxy ||
+is_listening 8224 ||
     fail_now "tinyproxy is not listening on 8224"
 
 ###############################################################################
